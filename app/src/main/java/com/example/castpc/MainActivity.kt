@@ -498,7 +498,7 @@ class MainActivity : Activity() {
         btnText.text = if (on) "Stop casting" else "Start casting"
         btnArrow.text = if (on) "\u25A0" else "\u2192"
         btn.background = buttonBg(on)
-        statusText.text = if (on) "Casting. Switch to your game." else "Ready."
+        statusText.text = if (on) "Casting. Start your game." else "Ready."
         (statusDot.background as GradientDrawable)
             .setColor(if (on) Color.parseColor("#3DDC84") else slate)
         ipBox.isEnabled = !on
