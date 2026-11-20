@@ -3,80 +3,290 @@ package com.example.castpc
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
-import android.widget.*
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
+import android.view.Gravity
+import android.view.View
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
+import android.widget.TextView
 
 class MainActivity : Activity() {
 
     private lateinit var ipBox: EditText
-    private lateinit var btn: Button
-    private lateinit var status: TextView
+    private lateinit var btn: FrameLayout
+    private lateinit var btnText: TextView
+    private lateinit var btnArrow: TextView
+    private lateinit var statusText: TextView
+    private lateinit var statusDot: View
     private lateinit var landscapeBtn: RadioButton
     private lateinit var portraitBtn: RadioButton
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private val blue = Color.parseColor("#2F8BFF")
+    private val cyan = Color.parseColor("#3FD0FF")
+    private val slate = Color.parseColor("#8FA3C7")
 
-    private fun label(s: String, size: Float, color: Int, topDp: Int = 0) =
-        TextView(this).apply {
-            this.text = s
-            textSize = size
-            setTextColor(color)
-            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(topDp) }
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun dpf(v: Float) = v * resources.displayMetrics.density
+    private fun withAlpha(c: Int, a: Int) = Color.argb(a, Color.red(c), Color.green(c), Color.blue(c))
+    private fun lp(w: Int, h: Int, top: Int = 0) =
+        LinearLayout.LayoutParams(w, h).apply { topMargin = dp(top) }
+
+    private fun rect(fill: Int, radiusDp: Int, strokeDp: Float = 0f, stroke: Int = 0) =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dpf(radiusDp.toFloat())
+            setColor(fill)
+            if (strokeDp > 0f) setStroke(maxOf(1, dpf(strokeDp).toInt()), stroke)
         }
+
+    // Dark panel with a soft neon edge
+    private fun glowBox(fill: Int, radiusDp: Int, color: Int): LayerDrawable {
+        val outer = rect(Color.TRANSPARENT, radiusDp + 6, 5f, withAlpha(color, 35))
+        val mid = rect(Color.TRANSPARENT, radiusDp + 3, 3f, withAlpha(color, 80))
+        val inner = rect(fill, radiusDp, 1.5f, withAlpha(color, 230))
+        return LayerDrawable(arrayOf(outer, mid, inner)).apply {
+            setLayerInset(1, dp(3), dp(3), dp(3), dp(3))
+            setLayerInset(2, dp(6), dp(6), dp(6), dp(6))
+        }
+    }
+
+    private fun buttonBg(on: Boolean): LayerDrawable {
+        val c = if (on) Color.parseColor("#FF4D4D") else blue
+        val colors = if (on)
+            intArrayOf(0xFFB71C1C.toInt(), 0xFFFF5252.toInt(), 0xFFB71C1C.toInt())
+        else
+            intArrayOf(0xFF1F5CFF.toInt(), 0xFF2FA3FF.toInt(), 0xFF1F5CFF.toInt())
+        val outer = rect(Color.TRANSPARENT, 34, 5f, withAlpha(c, 35))
+        val mid = rect(Color.TRANSPARENT, 31, 3f, withAlpha(c, 80))
+        val pill = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, colors).apply {
+            cornerRadius = dpf(28f)
+            setStroke(dp(1), Color.argb(150, 255, 255, 255))
+        }
+        return LayerDrawable(arrayOf(outer, mid, pill)).apply {
+            setLayerInset(1, dp(3), dp(3), dp(3), dp(3))
+            setLayerInset(2, dp(6), dp(6), dp(6), dp(6))
+        }
+    }
+
+    private fun iconRow(res: Int, label: String, topDp: Int, size: Float = 14f) =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = lp(-1, -2, topDp)
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(res)
+                layoutParams = LinearLayout.LayoutParams(dp(22), dp(22))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = label
+                setTextColor(slate)
+                textSize = size
+                setPadding(dp(12), 0, 0, 0)
+            })
+        }
+
+    private fun radio(label: String) = RadioButton(this).apply {
+        text = label
+        textSize = 16f
+        setTextColor(Color.WHITE)
+        buttonTintList = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(blue, slate)
+        )
+    }
+
+    private fun fadeLine(toRight: Boolean) = View(this).apply {
+        val colors = intArrayOf(Color.TRANSPARENT, withAlpha(blue, 170))
+        if (!toRight) colors.reverse()
+        background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, colors)
+        layoutParams = LinearLayout.LayoutParams(0, dp(1), 1f)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = Color.parseColor("#040813")
+        window.navigationBarColor = Color.parseColor("#020510")
         val prefs = getSharedPreferences("castpc", MODE_PRIVATE)
-        val grey = Color.parseColor("#9AA0A6")
 
+        // ---- header ----
+        val logo = ImageView(this).apply {
+            setImageResource(R.drawable.logo_cast)
+            layoutParams = lp(dp(84), dp(84), 16)
+        }
+        val title = TextView(this).apply {
+            val s = SpannableString("Cast2PC")
+            s.setSpan(ForegroundColorSpan(blue), 4, 7, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            text = s
+            setTextColor(Color.WHITE)
+            textSize = 44f
+            typeface = Typeface.create("sans-serif-black", Typeface.ITALIC)
+            setShadowLayer(dpf(10f), 0f, 0f, withAlpha(blue, 200))
+            layoutParams = lp(-2, -2, 4)
+        }
+        val subtitle = TextView(this).apply {
+            text = "Stream your phone to your PC"
+            setTextColor(slate)
+            textSize = 15f
+            layoutParams = lp(-2, -2, 2)
+        }
+        val accent = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(Color.TRANSPARENT, cyan, Color.TRANSPARENT)
+            )
+            layoutParams = lp(dp(140), dp(2), 14)
+        }
+
+        // ---- card ----
         ipBox = EditText(this).apply {
             hint = "192.168.1.10"
-            setHintTextColor(Color.parseColor("#5F6368"))
+            setHintTextColor(Color.parseColor("#4A5A7A"))
             setTextColor(Color.WHITE)
+            textSize = 22f
             setText(prefs.getString("ip", ""))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine()
-            layoutParams = LinearLayout.LayoutParams(-1, -2)
+            background = null
+            setPadding(0, dp(6), 0, dp(10))
+            layoutParams = lp(-1, -2, 6)
+        }
+        val ipLine = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(blue, cyan, blue)
+            )
+            layoutParams = lp(-1, dp(2), 0)
         }
 
-        landscapeBtn = RadioButton(this).apply { text = "Landscape"; setTextColor(Color.WHITE) }
-        portraitBtn = RadioButton(this).apply { text = "Portrait"; setTextColor(Color.WHITE) }
+        landscapeBtn = radio("Landscape")
+        portraitBtn = radio("Portrait")
         val group = RadioGroup(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(landscapeBtn)
-            addView(portraitBtn)
-            layoutParams = LinearLayout.LayoutParams(-1, -2)
+            orientation = RadioGroup.HORIZONTAL
+            layoutParams = lp(-1, -2, 8)
+            addView(landscapeBtn, RadioGroup.LayoutParams(-2, -2).apply { rightMargin = dp(40) })
+            addView(portraitBtn, RadioGroup.LayoutParams(-2, -2))
         }
         landscapeBtn.isChecked = prefs.getBoolean("landscape", true)
         portraitBtn.isChecked = !landscapeBtn.isChecked
 
-        btn = Button(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 16f
-            isAllCaps = false
-            setOnClickListener { toggle() }
-            layoutParams = LinearLayout.LayoutParams(-1, dp(56)).apply { topMargin = dp(32) }
-        }
-        status = label("", 14f, grey, 16)
-
-        setContentView(LinearLayout(this).apply {
+        val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#121212"))
-            setPadding(dp(24), dp(48), dp(24), dp(24))
-            addView(label("CastPC", 28f, Color.WHITE))
-            addView(label("Stream your phone to your PC", 14f, grey, 4))
-            addView(label("PC IP address", 13f, grey, 32))
+            background = glowBox(Color.argb(235, 8, 18, 42), 24, blue)
+            setPadding(dp(30), dp(26), dp(30), dp(24))
+            layoutParams = lp(-1, -2, 28)
+            addView(iconRow(R.drawable.ic_monitor, "PC IP address", 0))
             addView(ipBox)
-            addView(label("Cast orientation", 13f, grey, 24))
+            addView(ipLine)
+            addView(iconRow(R.drawable.ic_gamepad, "Cast orientation", 26))
             addView(group)
-            addView(label("Match the orientation your game is in.", 12f, grey, 4))
+            addView(iconRow(R.drawable.ic_info, "Match the orientation your game is in.", 6, 12f))
+        }
+
+        // ---- button ----
+        btnText = TextView(this).apply {
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(-1, -1)
+        }
+        btnArrow = TextView(this).apply {
+            textSize = 24f
+            setTextColor(Color.WHITE)
+            layoutParams = FrameLayout.LayoutParams(-2, -2).apply {
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                rightMargin = dp(34)
+            }
+        }
+        btn = FrameLayout(this).apply {
+            layoutParams = lp(-1, dp(68), 26)
+            isClickable = true
+            setOnClickListener { toggle() }
+            addView(btnText)
+            addView(btnArrow)
+        }
+
+        // ---- status ----
+        statusDot = View(this).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(slate) }
+            layoutParams = LinearLayout.LayoutParams(dp(10), dp(10))
+        }
+        statusText = TextView(this).apply {
+            setTextColor(slate)
+            textSize = 15f
+            setPadding(dp(14), 0, 0, 0)
+        }
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(6), 0, 0, 0)
+            layoutParams = lp(-1, -2, 22)
+            addView(statusDot)
+            addView(statusText)
+        }
+
+        // ---- footer ----
+        val credit = TextView(this).apply {
+            val s = SpannableString("by: Aaron Doronio")
+            s.setSpan(ForegroundColorSpan(blue), 4, s.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            text = s
+            setTextColor(slate)
+            textSize = 13f
+            setPadding(dp(14), 0, dp(14), 0)
+        }
+        val footer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = lp(-1, -2, 16)
+            addView(fadeLine(true))
+            addView(credit)
+            addView(fadeLine(false))
+        }
+        val spacer = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+        }
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(24), dp(32), dp(24), dp(20))
+            addView(logo)
+            addView(title)
+            addView(subtitle)
+            addView(accent)
+            addView(card)
             addView(btn)
-            addView(status)
+            addView(statusRow)
+            addView(spacer)
+            addView(footer)
+        }
+
+        val bg = ImageView(this).apply {
+            setImageResource(R.drawable.bg_main)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(content, FrameLayout.LayoutParams(-1, -1))
+        }
+        setContentView(FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#020510"))
+            addView(bg, FrameLayout.LayoutParams(-1, -1))
+            addView(scroll, FrameLayout.LayoutParams(-1, -1))
         })
 
         val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
@@ -91,12 +301,12 @@ class MainActivity : Activity() {
 
     private fun updateUi() {
         val on = StreamService.running
-        btn.text = if (on) "Stop casting" else "Start casting"
-        btn.background = GradientDrawable().apply {
-            cornerRadius = dp(12).toFloat()
-            setColor(Color.parseColor(if (on) "#C62828" else "#1E88E5"))
-        }
-        status.text = if (on) "Casting. Switch to your game." else "Ready."
+        btnText.text = if (on) "Stop casting" else "Start casting"
+        btnArrow.text = if (on) "\u25A0" else "\u2192"
+        btn.background = buttonBg(on)
+        statusText.text = if (on) "Casting. Switch to your game." else "Ready."
+        (statusDot.background as GradientDrawable)
+            .setColor(if (on) Color.parseColor("#3DDC84") else slate)
         ipBox.isEnabled = !on
         landscapeBtn.isEnabled = !on
         portraitBtn.isEnabled = !on
