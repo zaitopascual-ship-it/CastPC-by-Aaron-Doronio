@@ -3,6 +3,7 @@ package com.example.castpc
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
@@ -17,6 +18,7 @@ import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -24,6 +26,8 @@ import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 
 class MainActivity : Activity() {
@@ -36,6 +40,20 @@ class MainActivity : Activity() {
     private lateinit var statusDot: View
     private lateinit var landscapeBtn: RadioButton
     private lateinit var portraitBtn: RadioButton
+    private lateinit var settingsBody: LinearLayout
+    private lateinit var settingsArrow: TextView
+
+    // Stream settings: saved in SharedPreferences and sent to StreamService when casting starts
+    private val resOptions = intArrayOf(480, 540, 720, 1080)      // short edge, px
+    private val fpsOptions = intArrayOf(30, 60)
+    private val audioOptions = intArrayOf(64, 96, 128, 192)       // kbps
+    private val bufferOptions = intArrayOf(30, 50, 100)           // send-queue items (~0.3 / 0.5 / 1 s)
+    private var resIdx = 0
+    private var fpsIdx = 0
+    private var audioIdx = 0
+    private var bufferIdx = 0
+    private var videoKbps = StreamService.DEF_VIDEO_KBPS
+    private var autoAdjust = StreamService.DEF_AUTO
 
     private val blue = Color.parseColor("#2F8BFF")
     private val cyan = Color.parseColor("#3FD0FF")
@@ -118,11 +136,84 @@ class MainActivity : Activity() {
         layoutParams = LinearLayout.LayoutParams(0, dp(1), 1f)
     }
 
+    private fun sectionLabel(text: String, topDp: Int) = TextView(this).apply {
+        this.text = text
+        setTextColor(slate)
+        textSize = 13f
+        layoutParams = lp(-1, -2, topDp)
+    }
+
+    // A row of equal-width pill buttons where exactly one is selected
+    private fun chipRow(labels: List<String>, selected: Int, topDp: Int, onPick: (Int) -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = lp(-1, -2, topDp)
+        }
+        val chips = mutableListOf<TextView>()
+        fun paint(sel: Int) {
+            chips.forEachIndexed { i, t ->
+                val on = i == sel
+                t.background = rect(
+                    if (on) withAlpha(blue, 90) else Color.TRANSPARENT,
+                    12, 1.5f, if (on) blue else withAlpha(slate, 120)
+                )
+                t.setTextColor(if (on) Color.WHITE else slate)
+            }
+        }
+        labels.forEachIndexed { i, label ->
+            val chip = TextView(this).apply {
+                text = label
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setPadding(dp(2), dp(10), dp(2), dp(10))
+                layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply {
+                    if (i > 0) leftMargin = dp(8)
+                }
+                setOnClickListener { paint(i); onPick(i) }
+            }
+            chips += chip
+            row.addView(chip)
+        }
+        paint(selected)
+        return row
+    }
+
+    private fun setEnabledDeep(v: View, on: Boolean) {
+        v.isEnabled = on
+        if (v is ViewGroup) for (i in 0 until v.childCount) setEnabledDeep(v.getChildAt(i), on)
+    }
+
+    private fun indexOrDefault(options: IntArray, value: Int, default: Int): Int {
+        val i = options.indexOf(value)
+        return if (i >= 0) i else options.indexOf(default)
+    }
+
+    private fun loadSettings(p: SharedPreferences) {
+        resIdx = indexOrDefault(resOptions, p.getInt("side", StreamService.DEF_SIDE), StreamService.DEF_SIDE)
+        fpsIdx = indexOrDefault(fpsOptions, p.getInt("fps", StreamService.DEF_FPS), StreamService.DEF_FPS)
+        audioIdx = indexOrDefault(audioOptions, p.getInt("abitrate", StreamService.DEF_AUDIO_KBPS), StreamService.DEF_AUDIO_KBPS)
+        bufferIdx = indexOrDefault(bufferOptions, p.getInt("buffer", StreamService.DEF_QUEUE), StreamService.DEF_QUEUE)
+        videoKbps = p.getInt("vbitrate", StreamService.DEF_VIDEO_KBPS).coerceIn(1000, 20000)
+        autoAdjust = p.getBoolean("auto", StreamService.DEF_AUTO)
+    }
+
+    private fun saveSettings() {
+        getSharedPreferences("castpc", MODE_PRIVATE).edit()
+            .putInt("side", resOptions[resIdx])
+            .putInt("fps", fpsOptions[fpsIdx])
+            .putInt("vbitrate", videoKbps)
+            .putInt("abitrate", audioOptions[audioIdx])
+            .putInt("buffer", bufferOptions[bufferIdx])
+            .putBoolean("auto", autoAdjust)
+            .apply()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.parseColor("#040813")
         window.navigationBarColor = Color.parseColor("#020510")
         val prefs = getSharedPreferences("castpc", MODE_PRIVATE)
+        loadSettings(prefs)
 
         // ---- header ----
         val logo = ImageView(this).apply {
@@ -197,6 +288,108 @@ class MainActivity : Activity() {
             addView(iconRow(R.drawable.ic_info, "Match the orientation your game is in.", 6, 12f))
         }
 
+        // ---- settings card (collapsed by default) ----
+        val bitrateLabel = TextView(this).apply {
+            setTextColor(slate)
+            textSize = 13f
+            layoutParams = lp(-1, -2, 20)
+        }
+        fun showBitrate() { bitrateLabel.text = "Video bitrate: ${videoKbps / 1000} Mbps" }
+        showBitrate()
+        val bitrateBar = SeekBar(this).apply {
+            max = 19                                   // 1..20 Mbps
+            progress = (videoKbps / 1000 - 1).coerceIn(0, 19)
+            progressTintList = ColorStateList.valueOf(blue)
+            thumbTintList = ColorStateList.valueOf(cyan)
+            layoutParams = lp(-1, -2, 4)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar?, p: Int, fromUser: Boolean) {
+                    videoKbps = (p + 1) * 1000
+                    showBitrate()
+                    if (fromUser) saveSettings()
+                }
+                override fun onStartTrackingTouch(bar: SeekBar?) {}
+                override fun onStopTrackingTouch(bar: SeekBar?) {}
+            })
+        }
+        val checkedState = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        val autoSwitch = Switch(this).apply {
+            text = "Auto-adjust bitrate"
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            isChecked = autoAdjust
+            thumbTintList = ColorStateList(checkedState, intArrayOf(cyan, slate))
+            trackTintList = ColorStateList(checkedState, intArrayOf(withAlpha(blue, 140), withAlpha(slate, 90)))
+            layoutParams = lp(-1, -2, 22)
+            setOnCheckedChangeListener { _, on -> autoAdjust = on; saveSettings() }
+        }
+        val resetLink = TextView(this).apply {
+            text = "Reset to defaults"
+            setTextColor(cyan)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(10), 0, dp(4))
+            layoutParams = lp(-1, -2, 18)
+            setOnClickListener {
+                getSharedPreferences("castpc", MODE_PRIVATE).edit()
+                    .putString("ip", ipBox.text.toString().trim())
+                    .putBoolean("landscape", landscapeBtn.isChecked)
+                    .remove("side").remove("fps").remove("vbitrate")
+                    .remove("abitrate").remove("buffer").remove("auto")
+                    .apply()
+                recreate()
+            }
+        }
+
+        settingsBody = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(sectionLabel("Resolution", 18))
+            addView(chipRow(resOptions.map { "${it}p" }, resIdx, 8) { resIdx = it; saveSettings() })
+            addView(sectionLabel("Frame rate", 18))
+            addView(chipRow(fpsOptions.map { "$it fps" }, fpsIdx, 8) { fpsIdx = it; saveSettings() })
+            addView(bitrateLabel)
+            addView(bitrateBar)
+            addView(sectionLabel("Audio bitrate (kbps)", 18))
+            addView(chipRow(audioOptions.map { "$it" }, audioIdx, 8) { audioIdx = it; saveSettings() })
+            addView(sectionLabel("Delay buffer", 18))
+            addView(chipRow(listOf("Lowest", "Balanced", "Smooth"), bufferIdx, 8) { bufferIdx = it; saveSettings() })
+            addView(iconRow(R.drawable.ic_info, "Lowest = least delay, but more dropped frames on weak Wi-Fi.", 8, 12f))
+            addView(autoSwitch)
+            addView(iconRow(R.drawable.ic_info, "Lowers quality on its own when the Wi-Fi can't keep up.", 6, 12f))
+            addView(resetLink)
+        }
+        settingsArrow = TextView(this).apply {
+            text = "\u25BE"
+            setTextColor(slate)
+            textSize = 18f
+        }
+        val settingsHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = lp(-1, -2, 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "Stream settings"
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+            })
+            addView(settingsArrow)
+            setOnClickListener {
+                val open = settingsBody.visibility != View.VISIBLE
+                settingsBody.visibility = if (open) View.VISIBLE else View.GONE
+                settingsArrow.text = if (open) "\u25B4" else "\u25BE"
+            }
+        }
+        val settingsCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glowBox(Color.argb(235, 8, 18, 42), 24, blue)
+            setPadding(dp(26), dp(20), dp(26), dp(20))
+            layoutParams = lp(-1, -2, 16)
+            addView(settingsHeader)
+            addView(settingsBody)
+        }
+
         // ---- button ----
         btnText = TextView(this).apply {
             textSize = 18f
@@ -269,6 +462,7 @@ class MainActivity : Activity() {
             addView(subtitle)
             addView(accent)
             addView(card)
+            addView(settingsCard)
             addView(btn)
             addView(statusRow)
             addView(spacer)
@@ -310,6 +504,8 @@ class MainActivity : Activity() {
         ipBox.isEnabled = !on
         landscapeBtn.isEnabled = !on
         portraitBtn.isEnabled = !on
+        setEnabledDeep(settingsBody, !on)
+        settingsBody.alpha = if (on) 0.45f else 1f
     }
 
     private fun toggle() {
@@ -339,6 +535,12 @@ class MainActivity : Activity() {
                 putExtra("data", data)
                 putExtra("url", "rtmp://$ip:1935/cod")
                 putExtra("landscape", landscapeBtn.isChecked)
+                putExtra("side", resOptions[resIdx])
+                putExtra("fps", fpsOptions[fpsIdx])
+                putExtra("vbitrate", videoKbps)
+                putExtra("abitrate", audioOptions[audioIdx])
+                putExtra("queue", bufferOptions[bufferIdx])
+                putExtra("auto", autoAdjust)
             })
             btn.postDelayed({ updateUi() }, 800)
         }
